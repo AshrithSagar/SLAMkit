@@ -5,11 +5,32 @@ description = "SLAM"
 readme = "README.md"
 authors = [{ name = "Ashrith Sagar", email = "ashrithy@iisc.ac.in" }]
 requires-python = ">=3.14"
-dependencies = ["numpy>=2.5.5", "typingkit"]
+dependencies = ["numpy>=2.5.5", "rich>=15.0.0", "typingkit"]
 
 [build-system]
 requires = ["uv_build>=0.13.9,<0.14.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+lint = ["ruff>=0.17.5"]
+test = ["pytest>=9.2.0", "pytest-memray>=1.11.0"]
+typecheck = [
+    "basedpyright>=1.40.2",
+    "mypy[mypyc]>=2.4.1",
+    "pycroscope>=0.5.0",
+    "pyrefly>=1.4.1",
+    "pyright>=1.1.414",
+    "ty>=0.0.105",
+    "zuban>=0.10.2",
+]
+
+[tool.basedpyright]
+reportAny = false
+reportExplicitAny = false
+reportUnusedCallResult = false
+
+[tool.ruff.lint]
+ignore = ["F403", "F405", "N999"]
 
 [tool.uv.sources]
 typingkit = { git = "https://github.com/AshrithSagar/typingkit.git", rev = "main" }
