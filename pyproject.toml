@@ -25,9 +25,16 @@ typecheck = [
 ]
 
 [tool.basedpyright]
+include = ["src", "tests", "examples"]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+
 reportAny = false
 reportExplicitAny = false
 reportUnusedCallResult = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405", "N999"]
