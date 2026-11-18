@@ -1,19 +1,20 @@
 """
-EKF-SLAM state
-==============
+Gaussian SLAM state
+===================
 The joint Gaussian over ``[pose, landmark₁, landmark₂, ...]`` and its layout.
 
 This class owns *bookkeeping only*: where each block lives in the covariance,
 how the state grows, and how a tangent-space correction is applied. The
-filter equations themselves live in ``EkfSlam``.
+filter equations live in ``GaussianSlam``; how they are linearised lives in a
+``Linearizer``.
 
 The pose is kept on SE(2) and the covariance in its (right) tangent space, so
-this is an error-state EKF: corrections are retracted with ``⊕`` rather than
-added to an ``[x, y, θ]`` vector.
+this is an error-state filter: corrections are retracted with ``⊕`` rather
+than added to an ``[x, y, θ]`` vector.
 """
-# src/slamkit/estimation/ekf/state.py
+# src/slamkit/estimation/gaussian/state.py
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 
 import numpy as np
 
@@ -27,11 +28,11 @@ from slamkit.probability.covariance import Covariance
 from slamkit.sensing.observation import LandmarkInitialization, MeasurementLinearization
 
 __all__ = [
-    "EkfSlamState",
+    "GaussianSlamState",
 ]
 
 
-class EkfSlamState:
+class GaussianSlamState:
     """Mean (pose on SE(2), landmarks in the plane) and joint covariance."""
 
     POSE_DOF = SE2.DOF
@@ -81,12 +82,12 @@ class EkfSlamState:
         offset = self._offsets[landmark_id]
         return slice(offset, offset + self.LANDMARK_DOF)
 
-    def pose_landmark_covariance(self, landmark_id: LandmarkId) -> Matrix:
-        """The 5×5 marginal covariance of ``(pose, landmark)``."""
-        offset = self._offsets[landmark_id]
-        indices = np.concatenate(
-            (np.arange(self.POSE_DOF), np.arange(offset, offset + self.LANDMARK_DOF))
-        )
+    def joint_covariance(self, landmark_ids: Sequence[LandmarkId]) -> Matrix:
+        """The marginal covariance of ``[pose, landmark₁, …, landmarkₖ]``."""
+        indices = list(range(self.POSE_DOF))
+        for landmark_id in landmark_ids:
+            offset = self._offsets[landmark_id]
+            indices.extend(range(offset, offset + self.LANDMARK_DOF))
         return Matrix(self._covariance[np.ix_(indices, indices)])
 
     def embed(

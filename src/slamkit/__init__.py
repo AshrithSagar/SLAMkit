@@ -10,8 +10,9 @@ Subpackages, in dependency order:
 * ``probability`` -- Gaussians, innovations, noise models
 * ``sensing``     -- measurements, measurement models, sensors, observations
 * ``motion``      -- controls and motion models
-* ``association`` -- data association
-* ``estimation``  -- SLAM backends: EKF, FastSLAM, GraphSLAM
+* ``association``    -- data association: known, nearest-neighbour, JCBB
+* ``initialization`` -- when and where new landmarks enter the map
+* ``estimation``     -- SLAM backends: EKF/UKF, FastSLAM 1.0/2.0, GraphSLAM
 * ``simulation``, ``pipeline``, ``evaluation`` -- data, running, scoring
 """
 # src/slamkit/__init__.py

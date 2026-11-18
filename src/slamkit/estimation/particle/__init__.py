@@ -6,6 +6,11 @@ Particle-filter SLAM
 
 from slamkit.estimation.particle.fastslam import FastSlam
 from slamkit.estimation.particle.particle import LandmarkBelief, Particle
+from slamkit.estimation.particle.proposal import (
+    MotionProposal,
+    ObservationProposal,
+    PoseProposal,
+)
 from slamkit.estimation.particle.resampling import (
     MultinomialResampler,
     Resampler,
@@ -15,8 +20,11 @@ from slamkit.estimation.particle.resampling import (
 __all__ = [
     "FastSlam",
     "LandmarkBelief",
+    "MotionProposal",
     "MultinomialResampler",
+    "ObservationProposal",
     "Particle",
+    "PoseProposal",
     "Resampler",
     "SystematicResampler",
 ]

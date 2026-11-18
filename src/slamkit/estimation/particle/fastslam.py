@@ -1,9 +1,11 @@
 """
 FastSLAM
 ========
-FastSLAM 1.0: a particle filter over trajectories, an EKF per landmark per
-particle. Handles multi-modal pose beliefs and per-particle data association
-(each particle associates against its own map), at ``O(M·n)`` per update.
+A particle filter over trajectories, an EKF per landmark per particle.
+Handles multi-modal pose beliefs and per-particle data association (each
+particle associates against its own map), at ``O(M·n)`` per update.
+
+FastSLAM 1.0 and 2.0 are the same estimator with a different ``PoseProposal``.
 """
 # src/slamkit/estimation/particle/fastslam.py
 
@@ -16,8 +18,10 @@ from slamkit.core.arrays import Mat3, Vector
 from slamkit.core.frames import BodyFrame, WorldFrame
 from slamkit.estimation.estimator import SlamEstimate, SlamEstimator
 from slamkit.estimation.particle.particle import Particle
+from slamkit.estimation.particle.proposal import MotionProposal, PoseProposal
 from slamkit.estimation.particle.resampling import Resampler, SystematicResampler
 from slamkit.geometry.se2 import SE2
+from slamkit.initialization.base import LandmarkInitializer
 from slamkit.motion.controls import Control
 from slamkit.motion.model import MotionModel
 from slamkit.sensing.observation import Observation
@@ -28,9 +32,11 @@ __all__ = [
 
 
 class FastSlam[C: Control](SlamEstimator[C]):
-    """FastSLAM 1.0, composed from a motion model, a data associator and a resampler.
+    """FastSLAM, composed from a motion model, a data associator, a pose
+    proposal, a resampler and a landmark initializer.
 
-    Resampling happens only when the effective sample size drops below
+    The default ``MotionProposal`` gives FastSLAM 1.0; pass
+    ``ObservationProposal()`` for FastSLAM 2.0. Resampling happens only when the effective sample size drops below
     ``resample_threshold · num_particles``, which limits particle depletion.
     """
 
@@ -43,6 +49,8 @@ class FastSlam[C: Control](SlamEstimator[C]):
         resampler: Resampler | None = None,
         resample_threshold: float = 0.5,
         initial_pose: SE2[WorldFrame, BodyFrame] | None = None,
+        proposal: PoseProposal | None = None,
+        initializer: LandmarkInitializer | None = None,
     ) -> None:
         if num_particles < 1:
             raise ValueError("num_particles must be at least 1")
@@ -53,12 +61,15 @@ class FastSlam[C: Control](SlamEstimator[C]):
         self._rng = rng
         self._resampler = resampler if resampler is not None else SystematicResampler()
         self._resample_threshold = resample_threshold
+        self._proposal = proposal if proposal is not None else MotionProposal()
         pose = (
             initial_pose
             if initial_pose is not None
             else SE2[WorldFrame, BodyFrame].identity()
         )
-        self._particles = [Particle(pose) for _ in range(num_particles)]
+        self._particles = [
+            Particle(pose, initializer=initializer) for _ in range(num_particles)
+        ]
 
     @property
     def particles(self) -> Sequence[Particle]:
@@ -75,15 +86,13 @@ class FastSlam[C: Control](SlamEstimator[C]):
 
     def predict(self, control: C) -> None:
         for particle in self._particles:
-            particle.move_to(
-                self._motion_model.sample(particle.pose, control, self._rng)
-            )
+            self._proposal.predict(particle, self._motion_model, control, self._rng)
 
     def update(self, observations: Sequence[Observation]) -> None:
+        for particle in self._particles:
+            self._proposal.update(particle, observations, self._associator, self._rng)
         if not observations:
             return
-        for particle in self._particles:
-            particle.assimilate(observations, self._associator)
         self._normalize()
         if self.effective_sample_size() < self._resample_threshold * len(
             self._particles

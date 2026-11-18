@@ -17,14 +17,19 @@ from typing import Any
 
 import numpy as np
 
-from slamkit.core.arrays import Mat2x3, Matrix
+from slamkit.core.arrays import Mat2, Mat2x3, Matrix, Vec2, Vector
 from slamkit.core.frames import BodyFrame, SensorFrame, WorldFrame
 from slamkit.core.ids import LandmarkId
 from slamkit.geometry.point import Point2
+from slamkit.geometry.ray import Ray
 from slamkit.geometry.se2 import SE2
+from slamkit.probability.covariance import Covariance
 from slamkit.probability.gaussian import Gaussian
 from slamkit.sensing.measurement import Measurement
-from slamkit.sensing.models import PointMeasurementModel
+from slamkit.sensing.models import (
+    InvertiblePointMeasurementModel,
+    PointMeasurementModel,
+)
 from slamkit.sensing.observation import (
     LandmarkInitialization,
     MeasurementLinearization,
@@ -122,6 +127,18 @@ class PointSensor[M: Measurement[Any]](Sensor):
     def extrinsic(self) -> SE2[BodyFrame, SensorFrame]:
         return self._extrinsic
 
+    def in_sensor_frame(
+        self, pose: SE2[WorldFrame, BodyFrame], landmark: Point2[WorldFrame]
+    ) -> Point2[SensorFrame]:
+        """``T_bs⁻¹ T_wb⁻¹ l``: the landmark as this sensor sees it."""
+        return (pose @ self._extrinsic).inverse_transform(landmark)
+
+    def predict_measurement(
+        self, pose: SE2[WorldFrame, BodyFrame], landmark: Point2[WorldFrame]
+    ) -> M:
+        """``ẑ = h(x, l)`` alone, without Jacobians."""
+        return self._model.project(self.in_sensor_frame(pose, landmark))
+
     def predict(
         self, pose: SE2[WorldFrame, BodyFrame], landmark: Point2[WorldFrame]
     ) -> MeasurementPrediction[M]:
@@ -134,6 +151,14 @@ class PointSensor[M: Measurement[Any]](Sensor):
             wrt_pose=Matrix(dz_dbody @ in_body.wrt_transform),
             wrt_landmark=Matrix(dz_dbody @ in_body.wrt_point),
         )
+
+    def residual(
+        self,
+        measurement: M,
+        pose: SE2[WorldFrame, BodyFrame],
+        landmark: Point2[WorldFrame],
+    ) -> Vector:
+        return measurement.ominus(self.predict_measurement(pose, landmark))
 
     def linearize(
         self,
@@ -151,20 +176,32 @@ class PointSensor[M: Measurement[Any]](Sensor):
 
     def initialize_landmark(
         self, measurement: M, pose: SE2[WorldFrame, BodyFrame]
-    ) -> LandmarkInitialization:
-        """``l = T_wb T_bs h⁻¹(z)``, chaining Jacobians through both transforms."""
-        in_sensor = self._model.unproject(measurement)
+    ) -> LandmarkInitialization | None:
+        """``l = T_wb T_bs h⁻¹(z)``, chaining Jacobians through both transforms;
+        ``None`` if the model cannot invert a single reading."""
+        if not isinstance(self._model, InvertiblePointMeasurementModel):
+            return None
+        model: InvertiblePointMeasurementModel[M] = self._model
+        in_sensor = model.unproject(measurement)
         in_body = self._extrinsic.transform_with_jacobians(in_sensor)
         in_world = pose.transform_with_jacobians(in_body.point)
-        dworld_dsensor = in_world.wrt_point @ in_body.wrt_point
+        wrt_measurement = Matrix(
+            in_world.wrt_point
+            @ in_body.wrt_point
+            @ model.unproject_jacobian(measurement)
+        )
         return LandmarkInitialization(
             position=in_world.point,
             wrt_pose=Mat2x3(in_world.wrt_transform),
-            wrt_measurement=Matrix(
-                dworld_dsensor @ self._model.unproject_jacobian(measurement)
+            measurement_covariance=Mat2(
+                Covariance.propagate(wrt_measurement, model.covariance)
             ),
-            noise_covariance=self._model.covariance,
         )
+
+    def ray(self, measurement: M, pose: SE2[WorldFrame, BodyFrame]) -> Ray[WorldFrame]:
+        sensor_pose = pose @ self._extrinsic
+        direction = Vec2(sensor_pose.rotation @ self._model.direction(measurement))
+        return Ray(Point2[WorldFrame](sensor_pose.x, sensor_pose.y), direction)
 
     def measure(
         self,
@@ -173,7 +210,7 @@ class PointSensor[M: Measurement[Any]](Sensor):
         rng: np.random.Generator,
     ) -> M | None:
         """Sample a noisy reading of ``landmark``, or ``None`` if out of range."""
-        in_sensor = (pose @ self._extrinsic).inverse_transform(landmark)
+        in_sensor = self.in_sensor_frame(pose, landmark)
         if not self._sensing_range.contains(in_sensor):
             return None
         noise = Gaussian.zero_mean(self._model.covariance).sample(rng)
@@ -223,6 +260,11 @@ class PointObservation[M: Measurement[Any]](Observation):
     def noise_covariance(self) -> Matrix:
         return self._sensor.model.covariance
 
+    def residual(
+        self, pose: SE2[WorldFrame, BodyFrame], landmark: Point2[WorldFrame]
+    ) -> Vector:
+        return self._sensor.residual(self._measurement, pose, landmark)
+
     def linearize(
         self, pose: SE2[WorldFrame, BodyFrame], landmark: Point2[WorldFrame]
     ) -> MeasurementLinearization:
@@ -230,8 +272,11 @@ class PointObservation[M: Measurement[Any]](Observation):
 
     def initialize_landmark(
         self, pose: SE2[WorldFrame, BodyFrame]
-    ) -> LandmarkInitialization:
+    ) -> LandmarkInitialization | None:
         return self._sensor.initialize_landmark(self._measurement, pose)
+
+    def ray(self, pose: SE2[WorldFrame, BodyFrame]) -> Ray[WorldFrame]:
+        return self._sensor.ray(self._measurement, pose)
 
     def __repr__(self) -> str:
         return f"PointObservation(sensor={self.sensor_name!r}, measurement={self._measurement!r}, tag={self._tag})"

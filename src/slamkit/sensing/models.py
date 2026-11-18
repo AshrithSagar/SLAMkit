@@ -4,14 +4,20 @@ Point measurement models
 The sensor-specific part of observing a point landmark, and nothing else.
 
 A ``PointMeasurementModel[M]`` only knows how a point *already expressed in the
-sensor's frame* maps to a reading ``M`` and back:
+sensor's frame* maps to a reading ``M``:
 
     project   : Point2[SensorFrame] → M          (with ∂M/∂p)
+    direction : M → unit vector in SensorFrame   (the ray the reading allows)
+
+An ``InvertiblePointMeasurementModel[M]`` additionally recovers the point from
+a single reading -- range-bearing and cartesian sensors can, a bearing-only
+sensor cannot:
+
     unproject : M → Point2[SensorFrame]          (with ∂p/∂M)
 
 Robot pose, extrinsic calibration and the chain rule through them are handled
 once, generically, by ``PointSensor``. Adding a new point sensor therefore means
-writing these four small functions -- no SE(2) Jacobians, no estimator changes.
+writing these few small functions -- no SE(2) Jacobians, no estimator changes.
 """
 # src/slamkit/sensing/models.py
 
@@ -19,14 +25,23 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any
 
-from slamkit.core.arrays import Matrix
+import numpy as np
+
+from slamkit.core.arrays import Matrix, Vec2
 from slamkit.core.frames import SensorFrame
 from slamkit.geometry.point import Point2
 from slamkit.probability.covariance import Covariance
-from slamkit.sensing.measurement import Measurement, RangeBearing, RelativePosition
+from slamkit.sensing.measurement import (
+    Bearing,
+    Measurement,
+    RangeBearing,
+    RelativePosition,
+)
 
 __all__ = [
+    "BearingModel",
     "CartesianModel",
+    "InvertiblePointMeasurementModel",
     "PointMeasurementModel",
     "RangeBearingModel",
 ]
@@ -57,15 +72,27 @@ class PointMeasurementModel[M: Measurement[Any]](ABC):
         """``∂h/∂p``, shape ``(dim, 2)``."""
 
     @abstractmethod
+    def direction(self, measurement: M) -> Vec2:
+        """The unit direction, in the sensor frame, along which the point lies."""
+
+
+class InvertiblePointMeasurementModel[M: Measurement[Any]](PointMeasurementModel[M]):
+    """A point model whose single reading determines the point."""
+
+    @abstractmethod
     def unproject(self, measurement: M) -> Point2[SensorFrame]:
-        """``p = h⁻¹(z)``. Requires the measurement to fully determine the point."""
+        """``p = h⁻¹(z)``."""
 
     @abstractmethod
     def unproject_jacobian(self, measurement: M) -> Matrix:
         """``∂h⁻¹/∂z``, shape ``(2, dim)``."""
 
+    def direction(self, measurement: M) -> Vec2:
+        point = self.unproject(measurement).to_vector()
+        return Vec2(point / np.linalg.norm(point))
 
-class RangeBearingModel(PointMeasurementModel[RangeBearing]):
+
+class RangeBearingModel(InvertiblePointMeasurementModel[RangeBearing]):
     """Polar coordinates of the point: the classic EKF-SLAM landmark sensor."""
 
     def __init__(self, range_std: float, bearing_std: float) -> None:
@@ -89,7 +116,7 @@ class RangeBearingModel(PointMeasurementModel[RangeBearing]):
         return Matrix([[c, -r * s], [s, r * c]])
 
 
-class CartesianModel(PointMeasurementModel[RelativePosition]):
+class CartesianModel(InvertiblePointMeasurementModel[RelativePosition]):
     """The point's coordinates themselves, with independent per-axis noise."""
 
     def __init__(self, x_std: float, y_std: float) -> None:
@@ -106,3 +133,21 @@ class CartesianModel(PointMeasurementModel[RelativePosition]):
 
     def unproject_jacobian(self, measurement: RelativePosition) -> Matrix:
         return Matrix([[1.0, 0.0], [0.0, 1.0]])
+
+
+class BearingModel(PointMeasurementModel[Bearing]):
+    """Direction only. Not invertible: landmarks seen by this sensor alone must
+    be triangulated from several viewpoints (see ``slamkit.initialization``)."""
+
+    def __init__(self, bearing_std: float) -> None:
+        super().__init__(Covariance.diagonal(bearing_std))
+
+    def project(self, point: Point2[SensorFrame]) -> Bearing:
+        return Bearing(math.atan2(point.y, point.x))
+
+    def project_jacobian(self, point: Point2[SensorFrame]) -> Matrix:
+        q = point.x**2 + point.y**2
+        return Matrix([[-point.y / q, point.x / q]])
+
+    def direction(self, measurement: Bearing) -> Vec2:
+        return Vec2([math.cos(measurement.angle), math.sin(measurement.angle)])

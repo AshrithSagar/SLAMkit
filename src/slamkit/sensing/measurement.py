@@ -18,6 +18,7 @@ from slamkit.core.arrays import Vector
 from slamkit.geometry.manifold import Manifold
 
 __all__ = [
+    "Bearing",
     "Measurement",
     "RangeBearing",
     "RelativePosition",
@@ -89,3 +90,27 @@ class RelativePosition(Measurement["RelativePosition"]):
     @classmethod
     def from_vector(cls, vector: Vector) -> Self:
         return cls(float(vector[0]), float(vector[1]))
+
+
+@dataclass(frozen=True, slots=True)
+class Bearing(Measurement["Bearing"]):
+    """Direction to a point only, in the sensor's frame (a monocular camera's
+    pixel column, a direction-finding antenna). One reading does not fix the
+    point: it only constrains it to a ray."""
+
+    angle: float
+
+    DOF: ClassVar[int] = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "angle", Angle.wrap(self.angle))
+
+    def to_vector(self) -> Vector:
+        return Vector([self.angle])
+
+    @classmethod
+    def from_vector(cls, vector: Vector) -> Self:
+        return cls(float(vector[0]))
+
+    def ominus(self, other: Bearing) -> Vector:
+        return Vector([Angle.wrap(self.angle - other.angle)])

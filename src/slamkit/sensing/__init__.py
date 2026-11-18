@@ -5,9 +5,16 @@ Measurements, measurement models, sensors and observations.
 """
 # src/slamkit/sensing/__init__.py
 
-from slamkit.sensing.measurement import Measurement, RangeBearing, RelativePosition
+from slamkit.sensing.measurement import (
+    Bearing,
+    Measurement,
+    RangeBearing,
+    RelativePosition,
+)
 from slamkit.sensing.models import (
+    BearingModel,
     CartesianModel,
+    InvertiblePointMeasurementModel,
     PointMeasurementModel,
     RangeBearingModel,
 )
@@ -25,7 +32,10 @@ from slamkit.sensing.sensor import (
 )
 
 __all__ = [
+    "Bearing",
+    "BearingModel",
     "CartesianModel",
+    "InvertiblePointMeasurementModel",
     "LandmarkInitialization",
     "Measurement",
     "MeasurementLinearization",

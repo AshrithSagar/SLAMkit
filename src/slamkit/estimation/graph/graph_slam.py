@@ -37,17 +37,22 @@ from slamkit.estimation.graph.optimizers import (
 )
 from slamkit.estimation.graph.values import Key, LandmarkKey, PoseKey, Values
 from slamkit.geometry.se2 import SE2
+from slamkit.initialization.base import LandmarkInitializer, Sighting
 from slamkit.motion.controls import Control
 from slamkit.motion.model import MotionModel
-from slamkit.probability.gaussian import GaussianNoise, Innovation
-from slamkit.sensing.observation import Observation
+from slamkit.probability.gaussian import GaussianNoise
+from slamkit.sensing.observation import (
+    LandmarkInitialization,
+    MeasurementLinearization,
+    Observation,
+)
 
 __all__ = [
     "GraphSlam",
 ]
 
 
-class GraphSlam[C: Control](SmoothingSlamEstimator[C], MapHypothesis):
+class GraphSlam[C: Control](SmoothingSlamEstimator[C], MapHypothesis[PoseKey]):
     """Incremental-batch GraphSLAM, composed from a motion model, a data
     associator and a nonlinear optimiser.
 
@@ -64,9 +69,11 @@ class GraphSlam[C: Control](SmoothingSlamEstimator[C], MapHypothesis):
         initial_pose: SE2[WorldFrame, BodyFrame] | None = None,
         prior_covariance: Mat3 | None = None,
         optimize_every: int = 1,
+        initializer: LandmarkInitializer | None = None,
     ) -> None:
         if optimize_every < 0:
             raise ValueError("optimize_every must be non-negative")
+        super().__init__(initializer)
         self._motion_model = motion_model
         self._associator = associator
         self._optimizer = optimizer if optimizer is not None else LevenbergMarquardt()
@@ -132,18 +139,33 @@ class GraphSlam[C: Control](SmoothingSlamEstimator[C], MapHypothesis):
 
     # ── MapHypothesis ─────────────────────────────────────────────────────────
 
+    @property
+    def anchor(self) -> PoseKey:
+        return self._current
+
+    @property
+    def current_pose_covariance(self) -> Mat3:
+        # Only an initial value is derived from sightings here; the factors added
+        # for every sighting carry the exact pose coupling. Skip the marginal.
+        return Mat3(np.zeros((3, 3)))
+
+    @property
+    def current_pose(self) -> SE2[WorldFrame, BodyFrame]:
+        return self._values[self._current]
+
     def landmark_ids(self) -> Collection[LandmarkId]:
         return [key.landmark_id for key in self._values.landmarks]
 
-    def innovation(
+    def linearize(
         self, observation: Observation, landmark_id: LandmarkId
-    ) -> Innovation:
-        landmark = LandmarkKey(landmark_id)
-        linearization = observation.linearize(
-            self._values[self._current], self._values[landmark]
+    ) -> MeasurementLinearization:
+        return observation.linearize(
+            self._values[self._current], self._values[LandmarkKey(landmark_id)]
         )
-        return linearization.innovation_given(
-            self._joint_covariance(self._current, landmark)
+
+    def covariance(self, landmark_ids: Sequence[LandmarkId]) -> Matrix:
+        return self._joint_covariance(
+            self._current, *(LandmarkKey(lid) for lid in landmark_ids)
         )
 
     def update_landmark(
@@ -155,11 +177,20 @@ class GraphSlam[C: Control](SmoothingSlamEstimator[C], MapHypothesis):
             )
         )
 
-    def add_landmark(self, observation: Observation, landmark_id: LandmarkId) -> None:
+    def add_landmark(
+        self,
+        landmark_id: LandmarkId,
+        initialization: LandmarkInitialization,
+        sightings: Sequence[Sighting[PoseKey]],
+    ) -> None:
+        """Insert the landmark, constrained by *every* sighting from the pose it
+        was made at -- essential when one sighting alone (a bearing) cannot fix it."""
         key = LandmarkKey(landmark_id)
-        initialization = observation.initialize_landmark(self._values[self._current])
         self._values.set_landmark(key, initialization.position)
-        self._add_factor(LandmarkObservationFactor(self._current, key, observation))
+        for sighting in sightings:
+            self._add_factor(
+                LandmarkObservationFactor(sighting.anchor, key, sighting.observation)
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -32,6 +32,14 @@ class Covariance(Namespace):
         return Matrix(jacobian @ covariance @ jacobian.T)
 
     @staticmethod
+    def project_psd(covariance: Matrix) -> Matrix:
+        """The nearest positive-semidefinite matrix (negative eigenvalues,
+        typically round-off, clipped to zero)."""
+        eigenvalues, eigenvectors = np.linalg.eigh(Covariance.symmetrize(covariance))
+        clipped = np.clip(eigenvalues, 0.0, None)
+        return Matrix((eigenvectors * clipped) @ eigenvectors.T)
+
+    @staticmethod
     def diagonal(*standard_deviations: float) -> Matrix:
         return Matrix(
             np.diag(np.square(np.asarray(standard_deviations, dtype=np.float64)))
